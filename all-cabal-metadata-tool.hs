@@ -28,58 +28,12 @@ import Codec.Compression.GZip (decompress)
 import Crypto.Hash.SHA256 (hashlazy)
 import qualified Data.ByteString.Base16 as B16
 import Stackage.PackageIndex.Conduit
-
-data PackageInfo = PackageInfo
-    { piLatest :: !Version
-    , piHash :: !Text
-    , piAllVersions :: !(Set Version)
-    , piSynopsis :: !Text
-    , piDescription :: !Text
-    , piDescriptionType :: !Text
-    , piChangeLog :: !Text
-    , piChangeLogType :: !Text
-    }
-    deriving (Show, Eq, Typeable, Generic)
-instance ToJSON PackageInfo where
-    toJSON pi = object
-        [ "latest" .= renderDistText (piLatest pi)
-        , "hash" .= piHash pi
-        , "all-versions" .= map renderDistText (setToList $ piAllVersions pi)
-        , "synopsis" .= piSynopsis pi
-        , "description" .= piDescription pi
-        , "description-type" .= piDescriptionType pi
-        , "changelog" .= piChangeLog pi
-        , "changelog-type" .= piChangeLogType pi
-        ]
-instance FromJSON PackageInfo where
-    parseJSON = withObject "PackageInfo" $ \o -> PackageInfo
-        <$> (o .: "latest" >>= parseDistText)
-        <*> o .: "hash"
-        <*> (o .: "all-versions" >>= fmap setFromList . mapM parseDistText)
-        <*> o .: "synopsis"
-        <*> o .: "description"
-        <*> o .: "description-type"
-        <*> o .: "changelog"
-        <*> o .: "changelog-type"
+import Stackage.Metadata
 
 newtype SemiMap k v = SemiMap (Map k v)
 instance (Ord k, Semigroup v) => Monoid (SemiMap k v) where
     mempty = SemiMap mempty
     mappend (SemiMap x) (SemiMap y) = SemiMap $ unionWith (<>) x y
-
-data Deprecation = Deprecation
-    { depPackage :: !Text
-    , depInFavourOf :: !(Set Text)
-    }
-instance ToJSON Deprecation where
-    toJSON d = object
-        [ "deprecated-package" .= depPackage d
-        , "in-favour-of" .= depInFavourOf d
-        ]
-instance FromJSON Deprecation where
-    parseJSON = withObject "Deprecation" $ \o -> Deprecation
-        <$> o .: "deprecated-package"
-        <*> o .: "in-favour-of"
 
 main :: IO ()
 main = do
