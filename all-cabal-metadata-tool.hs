@@ -40,15 +40,18 @@ main = do
             $ setIndexLocation (return indexLocation)
               defaultSettings
 
-    SemiMap newest <- runResourceT $ sourceAllCabalFiles (return indexLocation) $$ foldMapC
-        (\cfe -> SemiMap $ singletonMap
-            (cfeName cfe)
-            (Max $ cfeVersion cfe, singletonSet $ cfeVersion cfe))
+    newest <- runResourceT $ sourceAllCabalFiles (return indexLocation) $$ flip foldlC mempty
+        (\m cfe ->
+            let name = cfeName cfe
+                version = cfeVersion cfe
+             in flip (insertMap name) m $ case lookup (cfeName cfe) m of
+                    Nothing -> (version, singletonSet version)
+                    Just (version', s) -> (max version version', insertSet version s))
 
     let onlyNewest cfe =
             case lookup (cfeName cfe) $ asMap newest of
                 Nothing -> assert False Nothing
-                Just (Max latest, allVersions)
+                Just (latest, allVersions)
                     | cfeVersion cfe == latest -> Just (cfe, allVersions)
                     | otherwise -> Nothing
 
@@ -56,7 +59,7 @@ main = do
         $ sourceAllCabalFiles (return indexLocation)
        $$ concatMapC onlyNewest
        =$ (do
-            concatMapMC (updatePIM newest set packageLocation)
+            concatMapMC (updatePackage set packageLocation)
             liftIO $ saveDeprecated man
             )
        =$ takeC 500
@@ -69,18 +72,51 @@ saveDeprecated man = do
     deps <- either throwIO return $ decodeEither' $ concat bss
     encodeFile "deprecated.yaml" (deps :: [Deprecation])
 
-newtype SemiMap k v = SemiMap (Map k v)
-instance (Ord k, Semigroup v) => Monoid (SemiMap k v) where
-    mempty = SemiMap mempty
-    mappend (SemiMap x) (SemiMap y) = SemiMap $ unionWith (<>) x y
-
-updatePIM newest set packageLocation (cfe, allVersions) = do
+updatePackage :: MonadResource m
+              => Settings
+              -> (String -> String -> FilePath)
+              -> (CabalFileEntry, Set Version)
+              -> m (Maybe ())
+updatePackage set packageLocation (cfe, allVersions) = do
     epi <- liftIO $ decodeFileEither fp
     case epi of
-        Left _ -> load >>= save
         Right pi
-            | version == piLatest pi && thehash == piHash pi -> return Nothing
-            | otherwise -> load >>= save
+            | version == piLatest pi
+           && thehash == piHash pi
+           -> return Nothing
+        _ -> do
+            putStrLn $ "Loading " ++ tshow (name, version)
+            gpd <-
+                case mgpd of
+                    ParseFailed pe -> error $ show (name, version, pe)
+                    ParseOk _ gpd -> return gpd
+
+            let pd = packageDescription gpd
+            when (package pd /= PackageIdentifier name version) $
+                error $ show ("mismatch", name, version, package pd)
+
+            let name' = renderDistText name
+                version' = renderDistText version
+            liftIO $ download set [(name', version')]
+            let tarball = packageLocation name' version'
+
+            (desc, desct, cl, clt) <-
+                sourceTarFile True tarball $$ foldlC goEntry
+                    (pack $ description pd, "haddock", "", "")
+
+            liftIO $ do
+                createDirectoryIfMissing True $ takeDirectory fp
+                encodeFile fp PackageInfo
+                    { piLatest = version
+                    , piHash = thehash
+                    , piAllVersions = allVersions
+                    , piSynopsis = pack $ synopsis pd
+                    , piDescription = desc
+                    , piDescriptionType = desct
+                    , piChangeLog = cl
+                    , piChangeLogType = clt
+                    }
+                return $ Just ()
   where
     name = cfeName cfe
     version = cfeVersion cfe
@@ -90,44 +126,7 @@ updatePIM newest set packageLocation (cfe, allVersions) = do
     fp = "packages" </> (take 2 $ name' ++ "XX") </> name' <.> "yaml"
     name' = renderDistText name
 
-    load = do
-        putStrLn $ "Loading " ++ tshow (name, version)
-        loadPI name version allVersions thehash set packageLocation mgpd
-
-    save pi = liftIO $ do
-        createDirectoryIfMissing True $ takeDirectory fp
-        encodeFile fp pi
-        return $ Just ()
-
     thehash = decodeUtf8 $ B16.encode $ hashlazy lbs
-
-loadPI name version _ _ _ _ (ParseFailed pe) = error $ show (name, version, pe)
-loadPI name version allVersions thehash set packageLocation (ParseOk _ gpd) = do
-    when (package pd /= PackageIdentifier name version) $
-        error $ show ("mismatch", name, version, package pd)
-
-    -- FIXME stackage-install: allow precomputed manager, and return path info
-    let name' = renderDistText name
-        version' = renderDistText version
-    liftIO $ download set [(name', version')]
-    let tarball = packageLocation name' version'
-
-    (desc, desct, cl, clt) <-
-        sourceTarFile True tarball $$ foldlC goEntry
-            (pack $ description pd, "haddock", "", "")
-
-    return PackageInfo
-        { piLatest = version
-        , piHash = thehash
-        , piAllVersions = allVersions
-        , piSynopsis = pack $ synopsis pd
-        , piDescription = desc
-        , piDescriptionType = desct
-        , piChangeLog = cl
-        , piChangeLogType = clt
-        }
-  where
-    pd = packageDescription gpd
 
     goEntry :: (Text, Text, Text, Text) -> Tar.Entry -> (Text, Text, Text, Text)
     goEntry orig@(desc, desct, cl, clt) e =
