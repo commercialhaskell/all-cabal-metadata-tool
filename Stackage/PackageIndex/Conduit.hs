@@ -49,8 +49,8 @@ sourceTarFile toUngzip fp = do
 data CabalFileEntry = CabalFileEntry
     { cfeName :: !PackageName
     , cfeVersion :: !Version
-    , cfeRaw :: !L.ByteString
-    , cfeParsed :: !(ParseResult GenericPackageDescription)
+    , cfeRaw :: L.ByteString
+    , cfeParsed :: ParseResult GenericPackageDescription
     }
 
 sourceAllCabalFiles

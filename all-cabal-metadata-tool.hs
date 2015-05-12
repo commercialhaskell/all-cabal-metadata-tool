@@ -44,7 +44,18 @@ main = do
         (\cfe -> SemiMap $ singletonMap
             (cfeName cfe)
             (Max $ cfeVersion cfe, singletonSet $ cfeVersion cfe))
-    runResourceT $ sourceAllCabalFiles (return indexLocation) $$ mapM_C (updatePIM newest set packageLocation)
+
+    let onlyNewest cfe =
+            case lookup (cfeName cfe) $ asMap newest of
+                Nothing -> assert False Nothing
+                Just (Max latest, allVersions)
+                    | cfeVersion cfe == latest -> Just (cfe, allVersions)
+                    | otherwise -> Nothing
+
+    runResourceT
+        $ sourceAllCabalFiles (return indexLocation)
+       $$ concatMapC onlyNewest
+       =$ mapM_C (updatePIM newest set packageLocation)
 
     saveDeprecated man
 
@@ -60,22 +71,18 @@ instance (Ord k, Semigroup v) => Monoid (SemiMap k v) where
     mempty = SemiMap mempty
     mappend (SemiMap x) (SemiMap y) = SemiMap $ unionWith (<>) x y
 
-updatePIM newest set packageLocation cfe
-    | latest == version = do
-        epi <- liftIO $ decodeFileEither fp
-        case epi of
-            Left _ -> load >>= save
-            Right pi
-                | version == piLatest pi && thehash == piHash pi -> return ()
-                | otherwise -> load >>= save
-    | otherwise = return ()
+updatePIM newest set packageLocation (cfe, allVersions) = do
+    epi <- liftIO $ decodeFileEither fp
+    case epi of
+        Left _ -> load >>= save
+        Right pi
+            | version == piLatest pi && thehash == piHash pi -> return ()
+            | otherwise -> load >>= save
   where
     name = cfeName cfe
     version = cfeVersion cfe
     lbs = cfeRaw cfe
     mgpd = cfeParsed cfe
-
-    Just (Max latest, allVersions) = lookup name $ asMap newest
 
     fp = "packages" </> (take 2 $ name' ++ "XX") </> name' <.> "yaml"
     name' = renderDistText name
