@@ -68,8 +68,8 @@ parse' s =
         [x] -> return x
         _ -> fail $ "Could not parse: " ++ s
 
-disp' :: Distribution.Text.Text t => t -> Text
-disp' = pack . render . disp
+disp' :: Distribution.Text.Text t => t -> String
+disp' = render . disp
 
 data PackageInfo = PackageInfo
     { piLatest :: !Version
@@ -104,15 +104,6 @@ instance FromJSON PackageInfo where
         <*> o .: "changelog"
         <*> o .: "changelog-type"
 
-newtype PackageInfoMap = PackageInfoMap (Map PackageName PackageInfo)
-instance ToJSON PackageInfoMap where
-    toJSON (PackageInfoMap m) = toJSON $ mapKeysWith const disp' m
-instance FromJSON PackageInfoMap where
-    parseJSON v = do
-        m <- parseJSON v
-        let go (x, y) = (, y) <$> parse' x
-        fmap (PackageInfoMap . mapFromList) $ mapM go $ mapToList $ asMap m
-
 newtype SemiMap k v = SemiMap (Map k v)
 instance (Ord k, Semigroup v) => Monoid (SemiMap k v) where
     mempty = SemiMap mempty
@@ -120,38 +111,37 @@ instance (Ord k, Semigroup v) => Monoid (SemiMap k v) where
 
 main :: IO ()
 main = do
-    let fp = "package-info.yaml"
-    epim <- decodeFileEither fp
-    pim <-
-        case epim of
-            Left e -> do
-                print e
-                return mempty
-            Right (PackageInfoMap pim) -> return pim
     SemiMap newest <- runResourceT $ sourceAllCabalFiles $$ foldMapC
         (\(name, version, _, _) ->
         SemiMap $ singletonMap name (Max version, singletonSet version))
-    pim' <- runResourceT $ sourceAllCabalFiles $$ foldMC (updatePIM newest) pim
-    encodeFile fp $ PackageInfoMap pim'
+    runResourceT $ sourceAllCabalFiles $$ mapM_C (updatePIM newest)
 
 updatePIM :: MonadResource m
           => Map PackageName (Max Version, Set Version)
-          -> Map PackageName PackageInfo
           -> (PackageName, Version, LByteString, ParseResult GenericPackageDescription)
-          -> m (Map PackageName PackageInfo)
-updatePIM newest pim (name, version, lbs, mgpd)
-    | latest == version = case lookup name pim of
-        Nothing -> do
-            pi <- loadPI name version allVersions thehash mgpd
-            return $ insertMap name pi pim
-        Just pi
-            | version == piLatest pi && thehash == piHash pi -> return pim
-            | otherwise -> do
-                pi' <- loadPI name version allVersions thehash mgpd
-                return $! insertMap name pi' pim
-    | otherwise = return pim
+          -> m ()
+updatePIM newest (name, version, lbs, mgpd)
+    | latest == version = do
+        epi <- liftIO $ decodeFileEither fp
+        case epi of
+            Left _ -> load >>= save
+            Right pi
+                | version == piLatest pi && thehash == piHash pi -> return ()
+                | otherwise -> load >>= save
+    | otherwise = return ()
   where
     Just (Max latest, allVersions) = lookup name newest
+
+    fp = "packages" </> (take 2 $ name' ++ "XX") </> name' <.> "yaml"
+    name' = disp' name
+
+    load = do
+        putStrLn $ "Loading " ++ tshow (name, version)
+        loadPI name version allVersions thehash mgpd
+
+    save pi = liftIO $ do
+        createDirectoryIfMissing True $ takeDirectory fp
+        encodeFile fp pi
 
     thehash = decodeUtf8 $ B16.encode $ hashlazy lbs
 
