@@ -27,51 +27,7 @@ import Stackage.Install
 import Codec.Compression.GZip (decompress)
 import Crypto.Hash.SHA256 (hashlazy)
 import qualified Data.ByteString.Base16 as B16
-
-sourceTarFile :: MonadResource m
-              => Bool -- ^ ungzip?
-              -> FilePath
-              -> Producer m Tar.Entry
-sourceTarFile toUngzip fp = do
-    bracketP (openBinaryFile fp ReadMode) hClose $ \h -> do
-        lbs <- liftIO $ L.hGetContents h
-        loop $ Tar.read $ ungzip' lbs
-  where
-    ungzip'
-        | toUngzip = decompress
-        | otherwise = id
-    loop Tar.Done = return ()
-    loop (Tar.Fail e) = throwM e
-    loop (Tar.Next e es) = yield e >> loop es
-
-sourceAllCabalFiles :: MonadResource m => Producer m (PackageName, Version, LByteString, ParseResult GenericPackageDescription)
-sourceAllCabalFiles = do
-    cabal <- liftIO $ getAppUserDataDirectory "cabal"
-    let tarball = cabal </> "packages" </> "hackage.haskell.org" </> "00-index.tar"
-    sourceTarFile False tarball =$= concatMapC go
-  where
-    go e =
-        case (toPkgVer $ Tar.entryPath e, Tar.entryContent e) of
-            (Just (name, version), Tar.NormalFile lbs _) ->
-                Just (name, version, lbs, parsePackageDescription $ unpack $ decodeUtf8 lbs)
-            _ -> Nothing
-
-    toPkgVer s0 = do
-        (name', '/':s1) <- Just $ break (== '/') s0
-        (version', '/':s2) <- Just $ break (== '/') s1
-        guard $ s2 == (name' ++ ".cabal")
-        name <- parse' name'
-        version <- parse' version'
-        Just (name, version)
-
-parse' :: (Monad m, Distribution.Text.Text t) => String -> m t
-parse' s =
-    case map fst $ filter (null . snd) $ readP_to_S parse s of
-        [x] -> return x
-        _ -> fail $ "Could not parse: " ++ s
-
-disp' :: Distribution.Text.Text t => t -> String
-disp' = render . disp
+import Stackage.PackageIndex.Conduit
 
 data PackageInfo = PackageInfo
     { piLatest :: !Version
@@ -86,9 +42,9 @@ data PackageInfo = PackageInfo
     deriving (Show, Eq, Typeable, Generic)
 instance ToJSON PackageInfo where
     toJSON pi = object
-        [ "latest" .= disp' (piLatest pi)
+        [ "latest" .= renderDistText (piLatest pi)
         , "hash" .= piHash pi
-        , "all-versions" .= map disp' (setToList $ piAllVersions pi)
+        , "all-versions" .= map renderDistText (setToList $ piAllVersions pi)
         , "synopsis" .= piSynopsis pi
         , "description" .= piDescription pi
         , "description-type" .= piDescriptionType pi
@@ -97,9 +53,9 @@ instance ToJSON PackageInfo where
         ]
 instance FromJSON PackageInfo where
     parseJSON = withObject "PackageInfo" $ \o -> PackageInfo
-        <$> (o .: "latest" >>= parse')
+        <$> (o .: "latest" >>= parseDistText)
         <*> o .: "hash"
-        <*> (o .: "all-versions" >>= fmap setFromList . mapM parse')
+        <*> (o .: "all-versions" >>= fmap setFromList . mapM parseDistText)
         <*> o .: "synopsis"
         <*> o .: "description"
         <*> o .: "description-type"
@@ -133,16 +89,17 @@ main = do
     deps <- either throwIO return $ decodeEither' $ concat bss
     encodeFile "deprecated.yaml" (deps :: [Deprecation])
 
-    SemiMap newest <- runResourceT $ sourceAllCabalFiles $$ foldMapC
-        (\(name, version, _, _) ->
-        SemiMap $ singletonMap name (Max version, singletonSet version))
-    runResourceT $ sourceAllCabalFiles $$ mapM_C (updatePIM newest)
+    SemiMap newest <- runResourceT $ sourceAllCabalFiles defaultIndexTar $$ foldMapC
+        (\cfe -> SemiMap $ singletonMap
+            (cfeName cfe)
+            (Max $ cfeVersion cfe, singletonSet $ cfeVersion cfe))
+    runResourceT $ sourceAllCabalFiles defaultIndexTar $$ mapM_C (updatePIM newest)
 
 updatePIM :: MonadResource m
           => Map PackageName (Max Version, Set Version)
-          -> (PackageName, Version, LByteString, ParseResult GenericPackageDescription)
+          -> CabalFileEntry
           -> m ()
-updatePIM newest (name, version, lbs, mgpd)
+updatePIM newest cfe
     | latest == version = do
         epi <- liftIO $ decodeFileEither fp
         case epi of
@@ -152,10 +109,15 @@ updatePIM newest (name, version, lbs, mgpd)
                 | otherwise -> load >>= save
     | otherwise = return ()
   where
+    name = cfeName cfe
+    version = cfeVersion cfe
+    lbs = cfeRaw cfe
+    mgpd = cfeParsed cfe
+
     Just (Max latest, allVersions) = lookup name newest
 
     fp = "packages" </> (take 2 $ name' ++ "XX") </> name' <.> "yaml"
-    name' = disp' name
+    name' = renderDistText name
 
     load = do
         putStrLn $ "Loading " ++ tshow (name, version)
@@ -180,8 +142,8 @@ loadPI name version allVersions thehash (ParseOk _ gpd) = do
         error $ show ("mismatch", name, version, package pd)
 
     -- FIXME stackage-install: allow precomputed manager, and return path info
-    let name' = unpack $ disp' name
-        version' = unpack $ disp' version
+    let name' = renderDistText name
+        version' = renderDistText version
     liftIO $ download defaultSettings [(name', version')]
     cabal <- liftIO $ getAppUserDataDirectory "cabal"
     let tarball = cabal
