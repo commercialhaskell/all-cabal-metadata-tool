@@ -3,6 +3,8 @@
 {-# LANGUAGE DeriveGeneric #-}
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE OverloadedStrings #-}
+import Network.HTTP.Client (newManager, withResponse, responseBody, brConsume)
+import Network.HTTP.Client.TLS (tlsManagerSettings)
 import           ClassyPrelude.Conduit
 import qualified Codec.Archive.Tar                     as Tar
 import qualified Data.ByteString.Lazy                  as L
@@ -109,8 +111,28 @@ instance (Ord k, Semigroup v) => Monoid (SemiMap k v) where
     mempty = SemiMap mempty
     mappend (SemiMap x) (SemiMap y) = SemiMap $ unionWith (<>) x y
 
+data Deprecation = Deprecation
+    { depPackage :: !Text
+    , depInFavourOf :: !(Set Text)
+    }
+instance ToJSON Deprecation where
+    toJSON d = object
+        [ "deprecated-package" .= depPackage d
+        , "in-favour-of" .= depInFavourOf d
+        ]
+instance FromJSON Deprecation where
+    parseJSON = withObject "Deprecation" $ \o -> Deprecation
+        <$> o .: "deprecated-package"
+        <*> o .: "in-favour-of"
+
 main :: IO ()
 main = do
+    man <- newManager tlsManagerSettings
+    bss <- withResponse "https://hackage.haskell.org/packages/deprecated.json" man
+        $ \res -> brConsume $ responseBody res
+    deps <- either throwIO return $ decodeEither' $ concat bss
+    encodeFile "deprecated.yaml" (deps :: [Deprecation])
+
     SemiMap newest <- runResourceT $ sourceAllCabalFiles $$ foldMapC
         (\(name, version, _, _) ->
         SemiMap $ singletonMap name (Max version, singletonSet version))
