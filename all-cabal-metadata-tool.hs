@@ -23,6 +23,8 @@ import Data.Yaml
 import Data.Aeson
 import Stackage.Install
 import Codec.Compression.GZip (decompress)
+import Crypto.Hash.SHA256 (hashlazy)
+import qualified Data.ByteString.Base16 as B16
 
 sourceTarFile :: MonadResource m
               => Bool -- ^ ungzip?
@@ -40,7 +42,7 @@ sourceTarFile toUngzip fp = do
     loop (Tar.Fail e) = throwM e
     loop (Tar.Next e es) = yield e >> loop es
 
-sourceAllCabalFiles :: MonadResource m => Producer m (PackageName, Version, ParseResult GenericPackageDescription)
+sourceAllCabalFiles :: MonadResource m => Producer m (PackageName, Version, LByteString, ParseResult GenericPackageDescription)
 sourceAllCabalFiles = do
     cabal <- liftIO $ getAppUserDataDirectory "cabal"
     let tarball = cabal </> "packages" </> "hackage.haskell.org" </> "00-index.tar"
@@ -49,7 +51,7 @@ sourceAllCabalFiles = do
     go e =
         case (toPkgVer $ Tar.entryPath e, Tar.entryContent e) of
             (Just (name, version), Tar.NormalFile lbs _) ->
-                Just (name, version, parsePackageDescription $ unpack $ decodeUtf8 lbs)
+                Just (name, version, lbs, parsePackageDescription $ unpack $ decodeUtf8 lbs)
             _ -> Nothing
 
     toPkgVer s0 = do
@@ -71,6 +73,7 @@ disp' = pack . render . disp
 
 data PackageInfo = PackageInfo
     { piLatest :: !Version
+    , piHash :: !Text
     , piAllVersions :: !(Set Version)
     , piSynopsis :: !Text
     , piDescription :: !Text
@@ -82,6 +85,7 @@ data PackageInfo = PackageInfo
 instance ToJSON PackageInfo where
     toJSON pi = object
         [ "latest" .= disp' (piLatest pi)
+        , "hash" .= piHash pi
         , "all-versions" .= map disp' (setToList $ piAllVersions pi)
         , "synopsis" .= piSynopsis pi
         , "description" .= piDescription pi
@@ -92,6 +96,7 @@ instance ToJSON PackageInfo where
 instance FromJSON PackageInfo where
     parseJSON = withObject "PackageInfo" $ \o -> PackageInfo
         <$> (o .: "latest" >>= parse')
+        <*> o .: "hash"
         <*> (o .: "all-versions" >>= fmap setFromList . mapM parse')
         <*> o .: "synopsis"
         <*> o .: "description"
@@ -124,7 +129,7 @@ main = do
                 return mempty
             Right (PackageInfoMap pim) -> return pim
     SemiMap newest <- runResourceT $ sourceAllCabalFiles $$ foldMapC
-        (\(name, version, _) ->
+        (\(name, version, _, _) ->
         SemiMap $ singletonMap name (Max version, singletonSet version))
     pim' <- runResourceT $ sourceAllCabalFiles $$ foldMC (updatePIM newest) pim
     encodeFile fp $ PackageInfoMap pim'
@@ -132,30 +137,33 @@ main = do
 updatePIM :: MonadResource m
           => Map PackageName (Max Version, Set Version)
           -> Map PackageName PackageInfo
-          -> (PackageName, Version, ParseResult GenericPackageDescription)
+          -> (PackageName, Version, LByteString, ParseResult GenericPackageDescription)
           -> m (Map PackageName PackageInfo)
-updatePIM newest pim (name, version, mgpd)
+updatePIM newest pim (name, version, lbs, mgpd)
     | latest == version = case lookup name pim of
         Nothing -> do
-            pi <- loadPI name version allVersions mgpd
+            pi <- loadPI name version allVersions thehash mgpd
             return $ insertMap name pi pim
         Just pi
-            | version == piLatest pi -> return pim
+            | version == piLatest pi && thehash == piHash pi -> return pim
             | otherwise -> do
-                pi' <- loadPI name version allVersions mgpd
+                pi' <- loadPI name version allVersions thehash mgpd
                 return $! insertMap name pi' pim
     | otherwise = return pim
   where
     Just (Max latest, allVersions) = lookup name newest
 
+    thehash = decodeUtf8 $ B16.encode $ hashlazy lbs
+
 loadPI :: MonadResource m
        => PackageName
        -> Version
        -> Set Version
+       -> Text -- ^ the hash
        -> ParseResult GenericPackageDescription
        -> m PackageInfo
-loadPI name version _ (ParseFailed pe) = error $ show (name, version, pe)
-loadPI name version allVersions (ParseOk _ gpd) = do
+loadPI name version _ _ (ParseFailed pe) = error $ show (name, version, pe)
+loadPI name version allVersions thehash (ParseOk _ gpd) = do
     when (package pd /= PackageIdentifier name version) $
         error $ show ("mismatch", name, version, package pd)
 
@@ -177,6 +185,7 @@ loadPI name version allVersions (ParseOk _ gpd) = do
 
     return PackageInfo
         { piLatest = version
+        , piHash = thehash
         , piAllVersions = allVersions
         , piSynopsis = pack $ synopsis pd
         , piDescription = desc
