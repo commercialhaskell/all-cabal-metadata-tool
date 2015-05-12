@@ -4,7 +4,6 @@ module Stackage.PackageIndex.Conduit
     , sourceAllCabalFiles
     , parseDistText
     , renderDistText
-    , defaultIndexTar
     , CabalFileEntry (..)
     ) where
 
@@ -47,11 +46,6 @@ sourceTarFile toUngzip fp = do
     loop (Tar.Fail e) = throwM e
     loop (Tar.Next e es) = yield e >> loop es
 
-defaultIndexTar :: IO FilePath
-defaultIndexTar = do
-    cabal <- getAppUserDataDirectory "cabal"
-    return $ cabal </> "packages" </> "hackage.haskell.org" </> "00-index.tar"
-
 data CabalFileEntry = CabalFileEntry
     { cfeName :: !PackageName
     , cfeVersion :: !Version
@@ -61,7 +55,7 @@ data CabalFileEntry = CabalFileEntry
 
 sourceAllCabalFiles
     :: MonadResource m
-    => IO FilePath -- ^ get location of 00-index.tar, probably want 'defaultIndexTar'
+    => IO FilePath
     -> Producer m CabalFileEntry
 sourceAllCabalFiles getIndexTar = do
     tarball <- liftIO $ getIndexTar

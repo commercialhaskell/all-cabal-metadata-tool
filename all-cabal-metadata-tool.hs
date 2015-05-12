@@ -3,7 +3,7 @@
 {-# LANGUAGE DeriveGeneric #-}
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE OverloadedStrings #-}
-import Network.HTTP.Client (newManager, withResponse, responseBody, brConsume)
+import Network.HTTP.Client (newManager, withResponse, responseBody, brConsume, Manager)
 import Network.HTTP.Client.TLS (tlsManagerSettings)
 import           ClassyPrelude.Conduit
 import qualified Codec.Archive.Tar                     as Tar
@@ -30,30 +30,37 @@ import qualified Data.ByteString.Base16 as B16
 import Stackage.PackageIndex.Conduit
 import Stackage.Metadata
 
-newtype SemiMap k v = SemiMap (Map k v)
-instance (Ord k, Semigroup v) => Monoid (SemiMap k v) where
-    mempty = SemiMap mempty
-    mappend (SemiMap x) (SemiMap y) = SemiMap $ unionWith (<>) x y
-
 main :: IO ()
 main = do
     man <- newManager tlsManagerSettings
+    packageLocation <- defaultPackageLocation
+    indexLocation <- defaultIndexLocation
+    let set = setGetManager (return man)
+            $ setPackageLocation (return packageLocation)
+            $ setIndexLocation (return indexLocation)
+              defaultSettings
+
+    SemiMap newest <- runResourceT $ sourceAllCabalFiles (return indexLocation) $$ foldMapC
+        (\cfe -> SemiMap $ singletonMap
+            (cfeName cfe)
+            (Max $ cfeVersion cfe, singletonSet $ cfeVersion cfe))
+    runResourceT $ sourceAllCabalFiles (return indexLocation) $$ mapM_C (updatePIM newest set packageLocation)
+
+    saveDeprecated man
+
+saveDeprecated :: Manager -> IO ()
+saveDeprecated man = do
     bss <- withResponse "https://hackage.haskell.org/packages/deprecated.json" man
         $ \res -> brConsume $ responseBody res
     deps <- either throwIO return $ decodeEither' $ concat bss
     encodeFile "deprecated.yaml" (deps :: [Deprecation])
 
-    SemiMap newest <- runResourceT $ sourceAllCabalFiles defaultIndexTar $$ foldMapC
-        (\cfe -> SemiMap $ singletonMap
-            (cfeName cfe)
-            (Max $ cfeVersion cfe, singletonSet $ cfeVersion cfe))
-    runResourceT $ sourceAllCabalFiles defaultIndexTar $$ mapM_C (updatePIM newest)
+newtype SemiMap k v = SemiMap (Map k v)
+instance (Ord k, Semigroup v) => Monoid (SemiMap k v) where
+    mempty = SemiMap mempty
+    mappend (SemiMap x) (SemiMap y) = SemiMap $ unionWith (<>) x y
 
-updatePIM :: MonadResource m
-          => Map PackageName (Max Version, Set Version)
-          -> CabalFileEntry
-          -> m ()
-updatePIM newest cfe
+updatePIM newest set packageLocation cfe
     | latest == version = do
         epi <- liftIO $ decodeFileEither fp
         case epi of
@@ -68,14 +75,14 @@ updatePIM newest cfe
     lbs = cfeRaw cfe
     mgpd = cfeParsed cfe
 
-    Just (Max latest, allVersions) = lookup name newest
+    Just (Max latest, allVersions) = lookup name $ asMap newest
 
     fp = "packages" </> (take 2 $ name' ++ "XX") </> name' <.> "yaml"
     name' = renderDistText name
 
     load = do
         putStrLn $ "Loading " ++ tshow (name, version)
-        loadPI name version allVersions thehash mgpd
+        loadPI name version allVersions thehash set packageLocation mgpd
 
     save pi = liftIO $ do
         createDirectoryIfMissing True $ takeDirectory fp
@@ -83,29 +90,16 @@ updatePIM newest cfe
 
     thehash = decodeUtf8 $ B16.encode $ hashlazy lbs
 
-loadPI :: MonadResource m
-       => PackageName
-       -> Version
-       -> Set Version
-       -> Text -- ^ the hash
-       -> ParseResult GenericPackageDescription
-       -> m PackageInfo
-loadPI name version _ _ (ParseFailed pe) = error $ show (name, version, pe)
-loadPI name version allVersions thehash (ParseOk _ gpd) = do
+loadPI name version _ _ _ _ (ParseFailed pe) = error $ show (name, version, pe)
+loadPI name version allVersions thehash set packageLocation (ParseOk _ gpd) = do
     when (package pd /= PackageIdentifier name version) $
         error $ show ("mismatch", name, version, package pd)
 
     -- FIXME stackage-install: allow precomputed manager, and return path info
     let name' = renderDistText name
         version' = renderDistText version
-    liftIO $ download defaultSettings [(name', version')]
-    cabal <- liftIO $ getAppUserDataDirectory "cabal"
-    let tarball = cabal
-              </> "packages"
-              </> "hackage.haskell.org"
-              </> name'
-              </> version'
-              </> concat [name', "-", version', ".tar.gz"]
+    liftIO $ download set [(name', version')]
+    let tarball = packageLocation name' version'
 
     (desc, desct, cl, clt) <-
         sourceTarFile True tarball $$ foldlC goEntry
