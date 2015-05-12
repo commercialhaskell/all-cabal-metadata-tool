@@ -141,7 +141,7 @@ updatePackage set packageLocation (cfe, allVersions) = do
     lbs = cfeRaw cfe
     mgpd = cfeParsed cfe
 
-    fp = "packages" </> (take 2 $ name' ++ "XX") </> name' <.> "yaml"
+    fp = "packages" </> (unpack $ toLower $ pack $ take 2 $ name' ++ "XX") </> name' <.> "yaml"
     name' = renderDistText name
 
     thehash = TE.decodeUtf8 $ B16.encode $ hashlazy lbs
