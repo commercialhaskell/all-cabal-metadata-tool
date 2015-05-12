@@ -1,34 +1,51 @@
-{-# LANGUAGE NoImplicitPrelude #-}
-{-# LANGUAGE TupleSections #-}
-{-# LANGUAGE DeriveGeneric #-}
-{-# LANGUAGE RankNTypes #-}
+{-# LANGUAGE DeriveGeneric     #-}
 {-# LANGUAGE OverloadedStrings #-}
-import Network.HTTP.Client (newManager, withResponse, responseBody, brConsume, Manager)
-import Network.HTTP.Client.TLS (tlsManagerSettings)
-import           ClassyPrelude.Conduit
+{-# LANGUAGE RankNTypes        #-}
+{-# LANGUAGE TupleSections     #-}
 import qualified Codec.Archive.Tar                     as Tar
+import           Control.Exception                     (assert)
+import           Control.Monad                         (when)
+import           Control.Monad.IO.Class                (liftIO)
+import           Control.Monad.Trans.Resource          (MonadResource,
+                                                        runResourceT, throwM)
+import           Crypto.Hash.SHA256                    (hashlazy)
+import qualified Data.ByteString                       as S
+import qualified Data.ByteString.Base16                as B16
 import qualified Data.ByteString.Lazy                  as L
-import           Data.Semigroup                        (Max (Max))
+import           Data.Conduit                          (($$), (=$))
+import qualified Data.Conduit.List                     as CL
+import qualified Data.Map                              as Map
+import           Data.Set                              (Set)
+import qualified Data.Set                              as Set
+import           Data.Text                             (Text, pack, toLower,
+                                                        unpack)
+import           Data.Text.Encoding                    (decodeUtf8With)
+import qualified Data.Text.Encoding                    as TE
+import           Data.Text.Encoding.Error              (lenientDecode)
 import           Data.Version                          (Version)
-import           Distribution.Compat.ReadP             (readP_to_S)
-import           Distribution.Package                  (PackageName, PackageIdentifier (..))
-import           Distribution.PackageDescription
-import           Distribution.PackageDescription.Parse
-import           Distribution.Text                     (parse, disp)
-import Text.PrettyPrint (render)
-import qualified Distribution.Text
-import           System.Directory
-import           System.FilePath
-import           System.IO                             (IOMode (ReadMode),
-                                                        openBinaryFile)
-import Data.Yaml
-import Data.Aeson
-import Stackage.Install
-import Codec.Compression.GZip (decompress)
-import Crypto.Hash.SHA256 (hashlazy)
-import qualified Data.ByteString.Base16 as B16
-import Stackage.PackageIndex.Conduit
-import Stackage.Metadata
+import           Data.Yaml                             (decodeEither',
+                                                        decodeFileEither,
+                                                        encodeFile)
+import           Distribution.Package                  (PackageIdentifier (..))
+import           Distribution.PackageDescription       (description, package,
+                                                        packageDescription,
+                                                        synopsis)
+import           Distribution.PackageDescription.Parse (ParseResult (..))
+import           Network.HTTP.Client                   (Manager, brConsume,
+                                                        newManager,
+                                                        responseBody,
+                                                        withResponse)
+import           Network.HTTP.Client.TLS               (tlsManagerSettings)
+import           Prelude                               hiding (pi)
+import           Stackage.Install
+import           Stackage.Metadata
+import           Stackage.PackageIndex.Conduit
+import           System.Directory                      (createDirectoryIfMissing)
+import           System.FilePath                       (splitExtension,
+                                                        takeDirectory, (<.>),
+                                                        (</>))
+
+data Pair x y = Pair !x !y
 
 main :: IO ()
 main = do
@@ -40,36 +57,37 @@ main = do
             $ setIndexLocation (return indexLocation)
               defaultSettings
 
-    newest <- runResourceT $ sourceAllCabalFiles (return indexLocation) $$ flip foldlC mempty
+    newest <- runResourceT $ sourceAllCabalFiles (return indexLocation)
+        $$ flip CL.fold Map.empty
         (\m cfe ->
             let name = cfeName cfe
                 version = cfeVersion cfe
-             in flip (insertMap name) m $ case lookup (cfeName cfe) m of
-                    Nothing -> (version, singletonSet version)
-                    Just (version', s) -> (max version version', insertSet version s))
+             in flip (Map.insert name) m $ case Map.lookup (cfeName cfe) m of
+                    Nothing -> Pair version (Set.singleton version)
+                    Just (Pair version' s) -> Pair (max version version') (Set.insert version s))
 
     let onlyNewest cfe =
-            case lookup (cfeName cfe) $ asMap newest of
+            case Map.lookup (cfeName cfe) newest of
                 Nothing -> assert False Nothing
-                Just (latest, allVersions)
+                Just (Pair latest allVersions)
                     | cfeVersion cfe == latest -> Just (cfe, allVersions)
                     | otherwise -> Nothing
 
     runResourceT
         $ sourceAllCabalFiles (return indexLocation)
-       $$ concatMapC onlyNewest
+       $$ CL.mapMaybe onlyNewest
        =$ (do
-            concatMapMC (updatePackage set packageLocation)
+            CL.mapMaybeM (updatePackage set packageLocation)
             liftIO $ saveDeprecated man
             )
-       =$ takeC 500
-       =$ sinkNull
+       =$ CL.isolate 500
+       =$ CL.sinkNull
 
 saveDeprecated :: Manager -> IO ()
 saveDeprecated man = do
     bss <- withResponse "https://hackage.haskell.org/packages/deprecated.json" man
         $ \res -> brConsume $ responseBody res
-    deps <- either throwIO return $ decodeEither' $ concat bss
+    deps <- either throwM return $ decodeEither' $ S.concat bss
     encodeFile "deprecated.yaml" (deps :: [Deprecation])
 
 updatePackage :: MonadResource m
@@ -85,7 +103,7 @@ updatePackage set packageLocation (cfe, allVersions) = do
            && thehash == piHash pi
            -> return Nothing
         _ -> do
-            putStrLn $ "Loading " ++ tshow (name, version)
+            liftIO $ putStrLn $ "Loading " ++ show (name, version)
             gpd <-
                 case mgpd of
                     ParseFailed pe -> error $ show (name, version, pe)
@@ -93,15 +111,15 @@ updatePackage set packageLocation (cfe, allVersions) = do
 
             let pd = packageDescription gpd
             when (package pd /= PackageIdentifier name version) $
-                error $ show ("mismatch", name, version, package pd)
+                error $ show ("mismatch" :: String, name, version, package pd)
 
-            let name' = renderDistText name
+            let name'' = renderDistText name
                 version' = renderDistText version
-            liftIO $ download set [(name', version')]
-            let tarball = packageLocation name' version'
+            liftIO $ download set [(name'', version')]
+            let tarball = packageLocation name'' version'
 
             (desc, desct, cl, clt) <-
-                sourceTarFile True tarball $$ foldlC goEntry
+                sourceTarFile True tarball $$ CL.fold goEntry
                     (pack $ description pd, "haddock", "", "")
 
             liftIO $ do
@@ -126,7 +144,7 @@ updatePackage set packageLocation (cfe, allVersions) = do
     fp = "packages" </> (take 2 $ name' ++ "XX") </> name' <.> "yaml"
     name' = renderDistText name
 
-    thehash = decodeUtf8 $ B16.encode $ hashlazy lbs
+    thehash = TE.decodeUtf8 $ B16.encode $ hashlazy lbs
 
     goEntry :: (Text, Text, Text, Text) -> Tar.Entry -> (Text, Text, Text, Text)
     goEntry orig@(desc, desct, cl, clt) e =
@@ -135,7 +153,7 @@ updatePackage set packageLocation (cfe, allVersions) = do
             (Desc desct', Just desc') -> (desc', desct', cl, clt)
             _ -> orig
 
-    toText (Tar.NormalFile lbs _) = Just $ decodeUtf8 $ toStrict lbs
+    toText (Tar.NormalFile lbs' _) = Just $ decodeUtf8With lenientDecode $ L.toStrict lbs'
     toText _ = Nothing
 
 data EntryType = Ignored | ChangeLog Text | Desc Text
@@ -147,7 +165,7 @@ toEntryType fp
     | otherwise = Ignored
   where
     (name', ext) = splitExtension fp
-    name = toLower name'
+    name = unpack $ toLower $ pack name'
     t =
         case ext of
             ".md" -> "markdown"
