@@ -55,9 +55,12 @@ main = do
     runResourceT
         $ sourceAllCabalFiles (return indexLocation)
        $$ concatMapC onlyNewest
-       =$ mapM_C (updatePIM newest set packageLocation)
-
-    saveDeprecated man
+       =$ (do
+            concatMapMC (updatePIM newest set packageLocation)
+            liftIO $ saveDeprecated man
+            )
+       =$ takeC 500
+       =$ sinkNull
 
 saveDeprecated :: Manager -> IO ()
 saveDeprecated man = do
@@ -76,7 +79,7 @@ updatePIM newest set packageLocation (cfe, allVersions) = do
     case epi of
         Left _ -> load >>= save
         Right pi
-            | version == piLatest pi && thehash == piHash pi -> return ()
+            | version == piLatest pi && thehash == piHash pi -> return Nothing
             | otherwise -> load >>= save
   where
     name = cfeName cfe
@@ -94,6 +97,7 @@ updatePIM newest set packageLocation (cfe, allVersions) = do
     save pi = liftIO $ do
         createDirectoryIfMissing True $ takeDirectory fp
         encodeFile fp pi
+        return $ Just ()
 
     thehash = decodeUtf8 $ B16.encode $ hashlazy lbs
 
