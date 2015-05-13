@@ -4,23 +4,25 @@ module Stackage.Metadata
     , Deprecation (..)
     ) where
 
-import Data.Version (Version)
-import Data.Text (Text)
-import Data.Set (Set)
-import qualified Data.Set as Set
-import Data.Typeable (Typeable)
-import Data.Aeson
-import Stackage.PackageIndex.Conduit (renderDistText, parseDistText)
+import           Data.Aeson                    (FromJSON (..), ToJSON (..),
+                                                object, withObject, (.:), (.=))
+import           Data.Set                      (Set)
+import qualified Data.Set                      as Set
+import           Data.Text                     (Text)
+import           Data.Typeable                 (Typeable)
+import           Data.Version                  (Version)
+import           Prelude                       hiding (pi)
+import           Stackage.PackageIndex.Conduit (parseDistText, renderDistText)
 
 data PackageInfo = PackageInfo
-    { piLatest :: !Version
-    , piHash :: !Text
-    , piAllVersions :: !(Set Version)
-    , piSynopsis :: !Text
-    , piDescription :: !Text
+    { piLatest          :: !Version
+    , piHash            :: !Text
+    , piAllVersions     :: !(Set Version)
+    , piSynopsis        :: !Text
+    , piDescription     :: !Text
     , piDescriptionType :: !Text
-    , piChangeLog :: !Text
-    , piChangeLogType :: !Text
+    , piChangeLog       :: !Text
+    , piChangeLogType   :: !Text
     }
     deriving (Show, Eq, Typeable)
 instance ToJSON PackageInfo where
@@ -46,7 +48,7 @@ instance FromJSON PackageInfo where
         <*> o .: "changelog-type"
 
 data Deprecation = Deprecation
-    { depPackage :: !Text
+    { depPackage    :: !Text
     , depInFavourOf :: !(Set Text)
     }
 instance ToJSON Deprecation where
