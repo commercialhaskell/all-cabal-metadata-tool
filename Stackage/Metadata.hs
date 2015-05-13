@@ -8,11 +8,15 @@ module Stackage.Metadata
 import           Control.Applicative           ((<$>), (<*>))
 import           Data.Aeson                    (FromJSON (..), ToJSON (..),
                                                 object, withObject, (.:), (.=))
+import           Data.Map                      (Map)
+import qualified Data.Map                      as Map
 import           Data.Set                      (Set)
 import qualified Data.Set                      as Set
 import           Data.Text                     (Text)
 import           Data.Typeable                 (Typeable)
 import           Data.Version                  (Version)
+import           Distribution.Package          (PackageName)
+import           Distribution.Version          (VersionRange)
 import           Prelude                       hiding (pi)
 import           Stackage.PackageIndex.Conduit (parseDistText, renderDistText)
 
@@ -25,6 +29,8 @@ data PackageInfo = PackageInfo
     , piDescriptionType :: !Text
     , piChangeLog       :: !Text
     , piChangeLogType   :: !Text
+    , piBasicDeps       :: !(Map PackageName VersionRange)
+    , piTestBenchDeps   :: !(Map PackageName VersionRange)
     }
     deriving (Show, Eq, Typeable)
 instance ToJSON PackageInfo where
@@ -37,7 +43,11 @@ instance ToJSON PackageInfo where
         , "description-type" .= piDescriptionType pi
         , "changelog" .= piChangeLog pi
         , "changelog-type" .= piChangeLogType pi
+        , "basic-deps" .= showM (piBasicDeps pi)
+        , "test-bench-deps" .= showM (piTestBenchDeps pi)
         ]
+      where
+        showM = Map.mapKeysWith const renderDistText . Map.map renderDistText
 instance FromJSON PackageInfo where
     parseJSON = withObject "PackageInfo" $ \o -> PackageInfo
         <$> (o .: "latest" >>= parseDistText)
@@ -48,6 +58,14 @@ instance FromJSON PackageInfo where
         <*> o .: "description-type"
         <*> o .: "changelog"
         <*> o .: "changelog-type"
+        <*> (o .: "basic-deps" >>= parseM)
+        <*> (o .: "test-bench-deps" >>= parseM)
+      where
+        parseM = fmap Map.fromList . mapM go . Map.toList
+        go (name, range) = do
+            name' <- parseDistText name
+            range' <- parseDistText range
+            return (name', range')
 
 data Deprecation = Deprecation
     { depPackage    :: !Text

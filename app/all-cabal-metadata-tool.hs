@@ -14,6 +14,7 @@ import qualified Data.ByteString.Base16                as B16
 import qualified Data.ByteString.Lazy                  as L
 import           Data.Conduit                          (($$), (=$))
 import qualified Data.Conduit.List                     as CL
+import           Data.Map                              (Map)
 import qualified Data.Map                              as Map
 import           Data.Set                              (Set)
 import qualified Data.Set                              as Set
@@ -26,11 +27,22 @@ import           Data.Version                          (Version)
 import           Data.Yaml                             (decodeEither',
                                                         decodeFileEither,
                                                         encodeFile)
-import           Distribution.Package                  (PackageIdentifier (..))
-import           Distribution.PackageDescription       (description, package,
+import           Distribution.Package                  (Dependency (..),
+                                                        PackageIdentifier (..),
+                                                        PackageName)
+import           Distribution.PackageDescription       (CondTree (..),
+                                                        Condition (..),
+                                                        ConfVar (..),
+                                                        condBenchmarks,
+                                                        condExecutables,
+                                                        condLibrary,
+                                                        condTestSuites,
+                                                        description, package,
                                                         packageDescription,
                                                         synopsis)
 import           Distribution.PackageDescription.Parse (ParseResult (..))
+import           Distribution.Version                  (VersionRange,
+                                                        intersectVersionRanges, simplifyVersionRange)
 import           Network.HTTP.Client                   (Manager, brConsume,
                                                         newManager,
                                                         responseBody,
@@ -127,6 +139,8 @@ updatePackage set packageLocation (cfe, allVersions) = do
 
             liftIO $ do
                 createDirectoryIfMissing True $ takeDirectory fp
+                let checkCond = const True -- FIXME do something intelligent
+                    getDeps' = getDeps checkCond
                 encodeFile fp PackageInfo
                     { piLatest = version
                     , piHash = thehash
@@ -136,6 +150,12 @@ updatePackage set packageLocation (cfe, allVersions) = do
                     , piDescriptionType = desct
                     , piChangeLog = cl
                     , piChangeLogType = clt
+                    , piBasicDeps = combineDeps
+                        $ maybe id ((:) . getDeps') (condLibrary gpd)
+                        $ map (getDeps' . snd) (condExecutables gpd)
+                    , piTestBenchDeps = combineDeps
+                        $ map (getDeps' . snd) (condTestSuites gpd)
+                       ++ map (getDeps' . snd) (condBenchmarks gpd)
                     }
                 return $ Just ()
   where
@@ -173,3 +193,27 @@ toEntryType fp
         case ext of
             ".md" -> "markdown"
             _ -> "text"
+
+-- | FIXME this function should get cleaned up and merged into stackage-common
+getDeps :: (Condition ConfVar -> Bool)
+        -> CondTree ConfVar [Dependency] a
+        -> Map PackageName VersionRange
+getDeps checkCond =
+    goTree
+  where
+    goTree (CondNode _data deps comps) = combineDeps
+        $ map (\(Dependency name range) -> Map.singleton name range) deps
+       ++ map goComp comps
+
+    goComp (cond, yes, no)
+        | checkCond cond = goTree yes
+        | otherwise = maybe Map.empty goTree no
+
+combineDeps :: [Map PackageName VersionRange] -> Map PackageName VersionRange
+combineDeps =
+    Map.unionsWith (\x y -> normalize . simplifyVersionRange $ intersectVersionRanges x y)
+  where
+    normalize vr =
+        case parseDistText $ renderDistText vr of
+            Nothing -> vr
+            Just vr' -> vr'
