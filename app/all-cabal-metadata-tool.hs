@@ -55,6 +55,7 @@ import           Stackage.Metadata
 import           Stackage.PackageIndex.Conduit
 import           Stackage.Update
 import           System.Directory                      (createDirectoryIfMissing)
+import           System.Environment                    (getArgs)
 import           System.FilePath                       (splitExtension,
                                                         takeDirectory,
                                                         takeFileName, (<.>),
@@ -64,6 +65,11 @@ data Pair x y = Pair !x !y
 
 main :: IO ()
 main = do
+    args <- getArgs
+    limitTo <-
+        case args of
+            [x] -> return $! read x
+            _ -> return 500
     stackageUpdate $ setVerify False defaultStackageUpdateSettings
 
     man <- newManager tlsManagerSettings
@@ -97,7 +103,7 @@ main = do
             CL.mapMaybeM (updatePackage set packageLocation)
             liftIO $ saveDeprecated man
             )
-       =$ CL.isolate 500
+       =$ CL.isolate limitTo
        =$ CL.sinkNull
 
 saveDeprecated :: Manager -> IO ()
