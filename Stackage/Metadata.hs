@@ -1,9 +1,11 @@
-{-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE DeriveDataTypeable #-}
+{-# LANGUAGE OverloadedStrings  #-}
 module Stackage.Metadata
     ( PackageInfo (..)
     , Deprecation (..)
     ) where
 
+import           Control.Applicative           ((<$>), (<*>))
 import           Data.Aeson                    (FromJSON (..), ToJSON (..),
                                                 object, withObject, (.:), (.=))
 import           Data.Set                      (Set)
