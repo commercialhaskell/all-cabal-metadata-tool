@@ -1,0 +1,35 @@
+deploy:
+  provider: s3
+  access_key_id: AKIAIAVQAXMLLEPM4I5A
+  secret_access_key:
+    secure: jXsdvhUKP4aprPi6gWNUE0oVOWaLtA8jisCvBUgDE5QOWNCFDk/vCElQ3spxeDSMRw38WAsBtMbDgOboy6XynnWXNrJYaWJUR0EMdnrhsgy3Vuwr2LZst9O5OnWqX54HnCl4pD5ZpjD83Ez4/yOHLuMeZnfsFxmCn9SgMBrbnyt2jJnTEq344+8DUHaVAmUwKTvDpldpWF5k4hD0jPpsIPUadEMtO5a7fVsdd0qBSGUdepCd8JG+4GkW/y1SP4aBk1ZppD81PnMHGku44K4aA3F4OeXh685jKnuaqkBbbkOuBggFkXCOBRZOtk+eTZUi8KRWqu1qHVTGi6x4OrTAOgcdYkieiOgDecNND5zNi6208Xa4z1f8inysmnnoJzRNM9cVKwzvldvjqSzR74G/b0slkTVmSY2WV9JDDHbn48tIKRrsvid1sG5W6py1oVO1O1IDN0Ki/YY2OpRqr0LS4AeA8iW9Ab0BPHO//HwnA1lpOkkZgmTGDonXOmtezf75MPWVeJBIqEUZHLg/bxL2x61e7tKTe2zueeqXsEULgS862h8ILI3oh5uVuYNxRJRBiKXWK+ssnj33uaVbFTPfAw/y7OmoFS9+aOXHlbMGRS2NqkA6Z1xDvFM2IGfyeo7EY2TBjOCTGg0jZtjn2HT5/LMxgkdRkczivIkaQV6BjL4=
+  bucket: stackage-travis
+  acl: public_read
+  skip_cleanup: true
+  local_dir: to-travis
+  upload-dir: all-cabal-metadata-tool
+  on:
+    repo: commercialhaskell/all-cabal-metadata-tool
+    branch: master
+env:
+- CABALVER=1.20 GHCVER=7.8.4
+before_install:
+- travis_retry sudo add-apt-repository -y ppa:hvr/ghc
+- travis_retry sudo apt-get update
+- travis_retry sudo apt-get install cabal-install-$CABALVER ghc-$GHCVER
+- export PATH=/opt/ghc/$GHCVER/bin:/opt/cabal/$CABALVER/bin:$HOME/.cabal/bin:$PATH
+install:
+- cabal --version
+- echo "$(ghc --version) [$(ghc --print-project-git-commit-id 2> /dev/null || echo
+  '?')]"
+- travis_retry cabal update
+- cabal install alex happy
+- cabal install --only-dependencies --enable-tests --enable-benchmarks
+script:
+- if [ -f configure.ac ]; then autoreconf -i; fi
+- cabal configure --enable-tests --enable-benchmarks -v2
+- cabal build
+- mkdir -p to-travis
+- cp dist/build/all-cabal-metadata-tool/all-cabal-metadata-tool to-travis
+- strip to-travis/all-cabal-metadata-tool
+- bzip2 to-travis/all-cabal-metadata-tool
