@@ -42,7 +42,8 @@ import           Distribution.PackageDescription       (CondTree (..),
                                                         synopsis)
 import           Distribution.PackageDescription.Parse (ParseResult (..))
 import           Distribution.Version                  (VersionRange,
-                                                        intersectVersionRanges, simplifyVersionRange)
+                                                        intersectVersionRanges,
+                                                        simplifyVersionRange)
 import           Network.HTTP.Client                   (Manager, brConsume,
                                                         newManager,
                                                         responseBody,
@@ -55,7 +56,8 @@ import           Stackage.PackageIndex.Conduit
 import           Stackage.Update
 import           System.Directory                      (createDirectoryIfMissing)
 import           System.FilePath                       (splitExtension,
-                                                        takeDirectory, (<.>),
+                                                        takeDirectory,
+                                                        takeFileName, (<.>),
                                                         (</>))
 
 data Pair x y = Pair !x !y
@@ -180,6 +182,7 @@ updatePackage set packageLocation (cfe, allVersions) = do
     toText _ = Nothing
 
 data EntryType = Ignored | ChangeLog Text | Desc Text
+    deriving Show
 
 toEntryType :: FilePath -> EntryType
 toEntryType fp
@@ -189,10 +192,11 @@ toEntryType fp
     | otherwise = Ignored
   where
     (name', ext) = splitExtension fp
-    name = unpack $ toLower $ pack name'
+    name = unpack $ toLower $ pack $ takeFileName name'
     t =
         case ext of
             ".md" -> "markdown"
+            ".markdown" -> "markdown"
             _ -> "text"
 
 -- | FIXME this function should get cleaned up and merged into stackage-common
