@@ -16,6 +16,7 @@ import           Data.Conduit                          (($$), (=$))
 import qualified Data.Conduit.List                     as CL
 import           Data.Map                              (Map)
 import qualified Data.Map                              as Map
+import           Data.Maybe                            (fromMaybe)
 import           Data.Set                              (Set)
 import qualified Data.Set                              as Set
 import           Data.Text                             (Text, pack, toLower,
@@ -23,27 +24,33 @@ import           Data.Text                             (Text, pack, toLower,
 import           Data.Text.Encoding                    (decodeUtf8With)
 import qualified Data.Text.Encoding                    as TE
 import           Data.Text.Encoding.Error              (lenientDecode)
-import           Data.Version                          (Version)
+import           Data.Version                          (Version (Version))
 import           Data.Yaml                             (decodeEither',
                                                         decodeFileEither,
                                                         encodeFile)
+import           Distribution.Compiler                 (CompilerFlavor (GHC))
 import           Distribution.Package                  (Dependency (..),
                                                         PackageIdentifier (..),
                                                         PackageName)
 import           Distribution.PackageDescription       (CondTree (..),
                                                         Condition (..),
-                                                        ConfVar (..),
+                                                        ConfVar (..), Flag (flagName, flagDefault), GenericPackageDescription,
                                                         condBenchmarks,
                                                         condExecutables,
                                                         condLibrary,
                                                         condTestSuites,
-                                                        description, package,
+                                                        description,
+                                                        genPackageFlags,
+                                                        package,
                                                         packageDescription,
                                                         synopsis)
 import           Distribution.PackageDescription.Parse (ParseResult (..))
+import           Distribution.System                   (Arch (X86_64),
+                                                        OS (Linux))
 import           Distribution.Version                  (VersionRange,
                                                         intersectVersionRanges,
-                                                        simplifyVersionRange)
+                                                        simplifyVersionRange,
+                                                        withinRange)
 import           Network.HTTP.Client                   (Manager, brConsume,
                                                         newManager,
                                                         responseBody,
@@ -152,7 +159,7 @@ updatePackage set packageLocation (cfe, allVersions) = do
 
             liftIO $ do
                 createDirectoryIfMissing True $ takeDirectory fp
-                let checkCond = const True -- FIXME do something intelligent
+                let checkCond = getCheckCond gpd
                     getDeps' = getDeps checkCond
                 encodeFile fp PackageInfo
                     { piLatest = version
@@ -213,7 +220,30 @@ toEntryType fp
             ".markdown" -> "markdown"
             _ -> "text"
 
--- | FIXME this function should get cleaned up and merged into stackage-common
+-- | FIXME these functions should get cleaned up and merged into stackage-common
+getCheckCond :: GenericPackageDescription -> Condition ConfVar -> Bool
+getCheckCond gpd =
+    go
+  where
+    go (Var (OS os)) = os == Linux -- arbitrary
+    go (Var (Arch arch)) = arch == X86_64 -- arbitrary
+    go (Var (Flag flag)) =
+        fromMaybe False -- arbitrary
+        $ Map.lookup flag flags
+    go (Var (Impl flavor range)) = flavor == GHC
+                                && ghcVersion `withinRange` range
+    go (Lit b) = b
+    go (CNot c) = not $ go c
+    go (CAnd x y) = go x && go y
+    go (COr x y) = go x || go y
+
+    ghcVersion = Version [7, 10, 1] [] -- arbitrary
+
+    flags =
+        Map.fromList $ map toPair $ genPackageFlags gpd
+      where
+        toPair f = (flagName f, flagDefault f)
+
 getDeps :: (Condition ConfVar -> Bool)
         -> CondTree ConfVar [Dependency] a
         -> Map PackageName VersionRange
