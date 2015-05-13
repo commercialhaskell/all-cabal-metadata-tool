@@ -186,6 +186,9 @@ data EntryType = Ignored | ChangeLog Text | Desc Text
 
 toEntryType :: FilePath -> EntryType
 toEntryType fp
+    -- Only take things in the root directory of the tarball
+    | length (filter (== '/') fp) /= 1 = Ignored
+
     | name == "changelog" = ChangeLog t
     | name == "changes" = ChangeLog t
     | name == "readme" = Desc t
