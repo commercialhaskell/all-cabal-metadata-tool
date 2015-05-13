@@ -40,6 +40,7 @@ import           Prelude                               hiding (pi)
 import           Stackage.Install
 import           Stackage.Metadata
 import           Stackage.PackageIndex.Conduit
+import           Stackage.Update
 import           System.Directory                      (createDirectoryIfMissing)
 import           System.FilePath                       (splitExtension,
                                                         takeDirectory, (<.>),
@@ -49,6 +50,8 @@ data Pair x y = Pair !x !y
 
 main :: IO ()
 main = do
+    stackageUpdate $ setVerify False defaultStackageUpdateSettings
+
     man <- newManager tlsManagerSettings
     packageLocation <- defaultPackageLocation
     indexLocation <- defaultIndexLocation
