@@ -120,7 +120,12 @@ updatePackage set packageLocation (cfe, allVersions) = do
            && thehash == piHash pi
            -> return Nothing
         _ -> do
-            liftIO $ putStrLn $ "Loading " ++ show (name, version)
+            liftIO $ putStrLn $ concat
+                [ "Loading "
+                , renderDistText name
+                , "-"
+                , renderDistText version
+                ]
             gpd <-
                 case mgpd of
                     ParseFailed pe -> error $ show (name, version, pe)
