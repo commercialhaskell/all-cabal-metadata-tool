@@ -184,6 +184,7 @@ data EntryType = Ignored | ChangeLog Text | Desc Text
 toEntryType :: FilePath -> EntryType
 toEntryType fp
     | name == "changelog" = ChangeLog t
+    | name == "changes" = ChangeLog t
     | name == "readme" = Desc t
     | otherwise = Ignored
   where
