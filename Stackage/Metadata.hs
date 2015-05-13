@@ -31,6 +31,10 @@ data PackageInfo = PackageInfo
     , piChangeLogType   :: !Text
     , piBasicDeps       :: !(Map PackageName VersionRange)
     , piTestBenchDeps   :: !(Map PackageName VersionRange)
+    , piAuthor          :: !Text
+    , piMaintainer      :: !Text
+    , piHomepage        :: !Text
+    , piLicenseName     :: !Text
     }
     deriving (Show, Eq, Typeable)
 instance ToJSON PackageInfo where
@@ -45,6 +49,10 @@ instance ToJSON PackageInfo where
         , "changelog-type" .= piChangeLogType pi
         , "basic-deps" .= showM (piBasicDeps pi)
         , "test-bench-deps" .= showM (piTestBenchDeps pi)
+        , "author" .= piAuthor pi
+        , "maintainer" .= piMaintainer pi
+        , "homepage" .= piHomepage pi
+        , "license-name" .= piLicenseName pi
         ]
       where
         showM = Map.mapKeysWith const renderDistText . Map.map renderDistText
@@ -60,6 +68,10 @@ instance FromJSON PackageInfo where
         <*> o .: "changelog-type"
         <*> (o .: "basic-deps" >>= parseM)
         <*> (o .: "test-bench-deps" >>= parseM)
+        <*> o .: "author"
+        <*> o .: "maintainer"
+        <*> o .: "homepage"
+        <*> o .: "license-name"
       where
         parseM = fmap Map.fromList . mapM go . Map.toList
         go (name, range) = do

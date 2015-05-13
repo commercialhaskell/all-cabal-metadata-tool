@@ -35,13 +35,14 @@ import           Distribution.Package                  (Dependency (..),
 import           Distribution.PackageDescription       (CondTree (..),
                                                         Condition (..),
                                                         ConfVar (..), Flag (flagName, flagDefault), GenericPackageDescription,
-                                                        condBenchmarks,
+                                                        author, condBenchmarks,
                                                         condExecutables,
                                                         condLibrary,
                                                         condTestSuites,
                                                         description,
                                                         genPackageFlags,
-                                                        package,
+                                                        homepage, license,
+                                                        maintainer, package,
                                                         packageDescription,
                                                         synopsis)
 import           Distribution.PackageDescription.Parse (ParseResult (..))
@@ -176,6 +177,10 @@ updatePackage set packageLocation (cfe, allVersions) = do
                     , piTestBenchDeps = combineDeps
                         $ map (getDeps' . snd) (condTestSuites gpd)
                        ++ map (getDeps' . snd) (condBenchmarks gpd)
+                    , piAuthor = pack $ author pd
+                    , piMaintainer = pack $ maintainer pd
+                    , piHomepage = pack $ homepage pd
+                    , piLicenseName = pack $ renderDistText $ license pd
                     }
                 return $ Just ()
   where
