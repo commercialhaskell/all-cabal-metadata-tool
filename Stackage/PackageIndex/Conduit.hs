@@ -51,6 +51,7 @@ data CabalFileEntry = CabalFileEntry
     { cfeName    :: !PackageName
     , cfeVersion :: !Version
     , cfeRaw     :: L.ByteString
+    , cfeEntry   :: Tar.Entry
     , cfeParsed  :: ParseResult GenericPackageDescription
     }
 
@@ -68,6 +69,7 @@ sourceAllCabalFiles getIndexTar = do
                 { cfeName = name
                 , cfeVersion = version
                 , cfeRaw = lbs
+                , cfeEntry = e
                 , cfeParsed = parsePackageDescription $ TL.unpack $ decodeUtf8With lenientDecode lbs
                 }
             _ -> Nothing
