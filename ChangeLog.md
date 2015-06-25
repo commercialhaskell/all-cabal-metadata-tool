@@ -1,3 +1,7 @@
+## 0.3.1.0
+
+* Strip BOM as necessary
+
 ## 0.3.0.0
 
 * `cfeEntry`

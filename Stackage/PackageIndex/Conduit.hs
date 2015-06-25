@@ -16,6 +16,7 @@ import qualified Data.ByteString.Lazy                  as L
 import           Data.Conduit                          (Producer, bracketP,
                                                         yield, (=$=))
 import qualified Data.Conduit.List                     as CL
+import           Data.Maybe                            (fromMaybe)
 import           Data.Text.Encoding.Error              (lenientDecode)
 import qualified Data.Text.Lazy                        as TL
 import           Data.Text.Lazy.Encoding               (decodeUtf8With)
@@ -70,7 +71,7 @@ sourceAllCabalFiles getIndexTar = do
                 , cfeVersion = version
                 , cfeRaw = lbs
                 , cfeEntry = e
-                , cfeParsed = parsePackageDescription $ TL.unpack $ decodeUtf8With lenientDecode lbs
+                , cfeParsed = parsePackageDescription $ TL.unpack $ dropBOM $ decodeUtf8With lenientDecode lbs
                 }
             _ -> Nothing
 
@@ -81,6 +82,9 @@ sourceAllCabalFiles getIndexTar = do
         name <- parseDistText name'
         version <- parseDistText version'
         Just (name, version)
+
+    -- https://github.com/haskell/hackage-server/issues/351
+    dropBOM t = fromMaybe t $ TL.stripPrefix (TL.pack "\xFEFF") t
 
 parseDistText :: (Monad m, Distribution.Text.Text t) => String -> m t
 parseDistText s =
