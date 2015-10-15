@@ -4,6 +4,7 @@
 {-# LANGUAGE TupleSections     #-}
 import qualified Codec.Archive.Tar                     as Tar
 import           Control.Exception                     (assert)
+import           Control.Exception.Enclosed            (tryAny)
 import           Control.Monad                         (when)
 import           Control.Monad.IO.Class                (liftIO)
 import           Control.Monad.Trans.Resource          (MonadResource,
@@ -151,38 +152,42 @@ updatePackage set packageLocation (cfe, allVersions) = do
 
             let name'' = renderDistText name
                 version' = renderDistText version
-            liftIO $ download set [(name'', version')]
-            let tarball = packageLocation name'' version'
+            eres <- liftIO $ tryAny $ download set [(name'', version')]
 
-            (desc, desct, cl, clt) <-
-                sourceTarFile True tarball $$ CL.fold goEntry
-                    (pack $ description pd, "haddock", "", "")
+            case eres of
+                Left e -> liftIO $ print e
+                Right () -> do
+                    let tarball = packageLocation name'' version'
 
-            liftIO $ do
-                createDirectoryIfMissing True $ takeDirectory fp
-                let checkCond = getCheckCond gpd
-                    getDeps' = getDeps checkCond
-                encodeFile fp PackageInfo
-                    { piLatest = version
-                    , piHash = thehash
-                    , piAllVersions = allVersions
-                    , piSynopsis = pack $ synopsis pd
-                    , piDescription = desc
-                    , piDescriptionType = desct
-                    , piChangeLog = cl
-                    , piChangeLogType = clt
-                    , piBasicDeps = combineDeps
-                        $ maybe id ((:) . getDeps') (condLibrary gpd)
-                        $ map (getDeps' . snd) (condExecutables gpd)
-                    , piTestBenchDeps = combineDeps
-                        $ map (getDeps' . snd) (condTestSuites gpd)
-                       ++ map (getDeps' . snd) (condBenchmarks gpd)
-                    , piAuthor = pack $ author pd
-                    , piMaintainer = pack $ maintainer pd
-                    , piHomepage = pack $ homepage pd
-                    , piLicenseName = pack $ renderDistText $ license pd
-                    }
-                return $ Just ()
+                    (desc, desct, cl, clt) <-
+                        sourceTarFile True tarball $$ CL.fold goEntry
+                            (pack $ description pd, "haddock", "", "")
+
+                    liftIO $ do
+                        createDirectoryIfMissing True $ takeDirectory fp
+                        let checkCond = getCheckCond gpd
+                            getDeps' = getDeps checkCond
+                        encodeFile fp PackageInfo
+                            { piLatest = version
+                            , piHash = thehash
+                            , piAllVersions = allVersions
+                            , piSynopsis = pack $ synopsis pd
+                            , piDescription = desc
+                            , piDescriptionType = desct
+                            , piChangeLog = cl
+                            , piChangeLogType = clt
+                            , piBasicDeps = combineDeps
+                                $ maybe id ((:) . getDeps') (condLibrary gpd)
+                                $ map (getDeps' . snd) (condExecutables gpd)
+                            , piTestBenchDeps = combineDeps
+                                $ map (getDeps' . snd) (condTestSuites gpd)
+                               ++ map (getDeps' . snd) (condBenchmarks gpd)
+                            , piAuthor = pack $ author pd
+                            , piMaintainer = pack $ maintainer pd
+                            , piHomepage = pack $ homepage pd
+                            , piLicenseName = pack $ renderDistText $ license pd
+                            }
+            return $ Just ()
   where
     name = cfeName cfe
     version = cfeVersion cfe

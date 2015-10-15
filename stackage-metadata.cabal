@@ -36,6 +36,7 @@ executable all-cabal-metadata-tool
   hs-source-dirs:      app
   build-depends:       base
                      , stackage-metadata
+                     , enclosed-exceptions
                      , filepath
                      , directory
                      , stackage-install >= 0.1.1
