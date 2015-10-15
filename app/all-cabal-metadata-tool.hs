@@ -63,7 +63,7 @@ import           Stackage.Install
 import           Stackage.Metadata
 import           Stackage.PackageIndex.Conduit
 import           Stackage.Update
-import           System.Directory                      (createDirectoryIfMissing)
+import           System.Directory                      (createDirectoryIfMissing, doesFileExist)
 import           System.Environment                    (getArgs)
 import           System.FilePath                       (splitExtension,
                                                         takeDirectory,
@@ -152,13 +152,12 @@ updatePackage set packageLocation (cfe, allVersions) = do
 
             let name'' = renderDistText name
                 version' = renderDistText version
-            eres <- liftIO $ tryAny $ download set [(name'', version')]
+            liftIO $ download set [(name'', version')]
 
-            case eres of
-                Left e -> liftIO $ print e
-                Right () -> do
-                    let tarball = packageLocation name'' version'
-
+            let tarball = packageLocation name'' version'
+            exists <- liftIO $ doesFileExist tarball
+            if exists
+                then do
                     (desc, desct, cl, clt) <-
                         sourceTarFile True tarball $$ CL.fold goEntry
                             (pack $ description pd, "haddock", "", "")
@@ -187,6 +186,7 @@ updatePackage set packageLocation (cfe, allVersions) = do
                             , piHomepage = pack $ homepage pd
                             , piLicenseName = pack $ renderDistText $ license pd
                             }
+                else liftIO $ putStrLn $ "Skipping: " ++ tarball
             return $ Just ()
   where
     name = cfeName cfe
