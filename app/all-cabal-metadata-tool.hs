@@ -11,6 +11,7 @@ import           Control.Monad.Trans.Resource          (MonadResource,
                                                         runResourceT, throwM)
 import           Crypto.Hash.SHA256                    (hashlazy)
 import qualified Data.ByteString                       as S
+import qualified Data.ByteString.Char8                 as S8
 import qualified Data.ByteString.Base16                as B16
 import qualified Data.ByteString.Lazy                  as L
 import           Data.Conduit                          (($$), (=$))
@@ -89,14 +90,20 @@ main = do
             $ setIndexLocation (return indexLocation)
               defaultSettings
 
+    preferredInfo <- loadPreferredInfo man
+
     newest <- runResourceT $ sourceAllCabalFiles (return indexLocation)
         $$ flip CL.fold Map.empty
         (\m cfe ->
             let name = cfeName cfe
                 version = cfeVersion cfe
-             in flip (Map.insert name) m $ case Map.lookup (cfeName cfe) m of
-                    Nothing -> Pair version (Set.singleton version)
-                    Just (Pair version' s) -> Pair (max version version') (Set.insert version s))
+             in if checkPreferred preferredInfo name version
+                    then flip (Map.insert name) m $
+                            case Map.lookup (cfeName cfe) m of
+                                Nothing -> Pair version (Set.singleton version)
+                                Just (Pair version' s) -> Pair (max version version') (Set.insert version s)
+                    -- Skip the deprecated package version
+                    else m)
 
     let onlyNewest cfe =
             case Map.lookup (cfeName cfe) newest of
@@ -121,6 +128,31 @@ saveDeprecated man = do
         $ \res -> brConsume $ responseBody res
     deps <- either throwM return $ decodeEither' $ S.concat bss
     encodeFile "deprecated.yaml" (deps :: [Deprecation])
+
+type PreferredInfo = Map PackageName VersionRange
+
+loadPreferredInfo :: Manager -> IO PreferredInfo
+loadPreferredInfo man = do
+    bss <- withResponse  "https://hackage.haskell.org/packages/preferred-versions" man
+        (brConsume . responseBody)
+    singletons <- mapM parse $ S8.lines $ S.concat bss
+    print $ Map.unions singletons
+    return $ Map.unions singletons
+  where
+    parse bs
+        | "--" `S.isPrefixOf` bs = return Map.empty
+        | S.null bs = return Map.empty
+        | otherwise = do
+            let (name', range') = break (== ' ') $ S8.unpack bs
+            case (,) <$> parseDistText name' <*> parseDistText range' of
+                Nothing -> error $ "Invalid preferred info line: " ++ show bs
+                Just (name, range) -> return $ Map.singleton name range
+
+checkPreferred :: PreferredInfo -> PackageName -> Version -> Bool
+checkPreferred m name version =
+    case Map.lookup name m of
+        Nothing -> True
+        Just range -> version `withinRange` range
 
 updatePackage :: MonadResource m
               => Settings
