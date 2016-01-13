@@ -136,7 +136,6 @@ loadPreferredInfo man = do
     bss <- withResponse  "https://hackage.haskell.org/packages/preferred-versions" man
         (brConsume . responseBody)
     singletons <- mapM parse $ S8.lines $ S.concat bss
-    print $ Map.unions singletons
     return $ Map.unions singletons
   where
     parse bs
