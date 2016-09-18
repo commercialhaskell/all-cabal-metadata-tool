@@ -39,7 +39,6 @@ executable all-cabal-metadata-tool
                      , enclosed-exceptions
                      , filepath
                      , directory
-                     , stackage-install >= 0.1.1
                      , http-client
                      , http-client-tls
                      , Cabal
@@ -53,7 +52,10 @@ executable all-cabal-metadata-tool
                      , transformers
                      , resourcet
                      , tar
-                     , stackage-update >= 0.1.2
+                     , http-conduit
+                     , conduit-combinators
+                     , temporary
+                     , http-types
   default-language:    Haskell2010
 
 source-repository head

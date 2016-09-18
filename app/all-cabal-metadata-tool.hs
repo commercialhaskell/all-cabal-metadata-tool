@@ -14,7 +14,7 @@ import qualified Data.ByteString                       as S
 import qualified Data.ByteString.Char8                 as S8
 import qualified Data.ByteString.Base16                as B16
 import qualified Data.ByteString.Lazy                  as L
-import           Data.Conduit                          (($$), (=$))
+import           Conduit
 import qualified Data.Conduit.List                     as CL
 import           Data.Map                              (Map)
 import qualified Data.Map                              as Map
@@ -54,45 +54,41 @@ import           Distribution.Version                  (VersionRange,
                                                         intersectVersionRanges,
                                                         simplifyVersionRange,
                                                         withinRange)
+import           Network.HTTP.Types                    (status200)
 import           Network.HTTP.Client                   (Manager, brConsume,
                                                         newManager,
                                                         responseBody,
                                                         withResponse)
 import           Network.HTTP.Client.TLS               (tlsManagerSettings)
+import           Network.HTTP.Simple
 import           Prelude                               hiding (pi)
-import           Stackage.Install
 import           Stackage.Metadata
 import           Stackage.PackageIndex.Conduit
-import           Stackage.Update
 import           System.Directory                      (createDirectoryIfMissing, doesFileExist)
 import           System.Environment                    (getArgs)
 import           System.FilePath                       (splitExtension,
                                                         takeDirectory,
                                                         takeFileName, (<.>),
                                                         (</>))
+import System.IO (hClose)
+import System.IO.Temp
 
 data Pair x y = Pair !x !y
 
 main :: IO ()
-main = do
+main = withSystemTempFile "index.tar.gz" $ \indexFP indexH -> do
     args <- getArgs
     limitTo <-
         case args of
             [x] -> return $! read x
             _ -> return 500
-    stackageUpdate $ setVerify False defaultStackageUpdateSettings
 
-    man <- newManager tlsManagerSettings
-    packageLocation <- defaultPackageLocation
-    indexLocation <- defaultIndexLocation
-    let set = setGetManager (return man)
-            $ setPackageLocation (return packageLocation)
-            $ setIndexLocation (return indexLocation)
-              defaultSettings
+    preferredInfo <- loadPreferredInfo
 
-    preferredInfo <- loadPreferredInfo man
+    httpSink "https://s3.amazonaws.com/hackage.fpcomplete.com/01-index.tar.gz" $ const $ sinkHandle indexH
+    hClose indexH
 
-    newest <- runResourceT $ sourceAllCabalFiles (return indexLocation)
+    newest <- runResourceT $ sourceAllCabalFiles (return indexFP)
         $$ flip CL.fold Map.empty
         (\m cfe ->
             let name = cfeName cfe
@@ -113,29 +109,28 @@ main = do
                     | otherwise -> Nothing
 
     runResourceT
-        $ sourceAllCabalFiles (return indexLocation)
+        $ sourceAllCabalFiles (return indexFP)
        $$ CL.mapMaybe onlyNewest
        =$ (do
-            CL.mapMaybeM (updatePackage set packageLocation)
-            liftIO $ saveDeprecated man
+            CL.mapMaybeM updatePackage
+            liftIO saveDeprecated
             )
        =$ CL.isolate limitTo
        =$ CL.sinkNull
 
-saveDeprecated :: Manager -> IO ()
-saveDeprecated man = do
-    bss <- withResponse "https://hackage.haskell.org/packages/deprecated.json" man
-        $ \res -> brConsume $ responseBody res
-    deps <- either throwM return $ decodeEither' $ S.concat bss
+saveDeprecated :: IO ()
+saveDeprecated = do
+    bs <- httpSink "https://hackage.haskell.org/packages/deprecated.json"
+        $ const $ foldC
+    deps <- either throwM return $ decodeEither' bs
     encodeFile "deprecated.yaml" (deps :: [Deprecation])
 
 type PreferredInfo = Map PackageName VersionRange
 
-loadPreferredInfo :: Manager -> IO PreferredInfo
-loadPreferredInfo man = do
-    bss <- withResponse  "https://hackage.haskell.org/packages/preferred-versions" man
-        (brConsume . responseBody)
-    singletons <- mapM parse $ S8.lines $ S.concat bss
+loadPreferredInfo :: IO PreferredInfo
+loadPreferredInfo = do
+    bs <- httpSink "https://hackage.haskell.org/packages/preferred-versions" $ const foldC
+    singletons <- mapM parse $ S8.lines bs
     return $ Map.unions singletons
   where
     parse bs
@@ -153,12 +148,10 @@ checkPreferred m name version =
         Nothing -> True
         Just range -> version `withinRange` range
 
-updatePackage :: MonadResource m
-              => Settings
-              -> (String -> String -> FilePath)
-              -> (CabalFileEntry, Set Version)
+updatePackage :: MonadIO m
+              => (CabalFileEntry, Set Version)
               -> m (Maybe ())
-updatePackage set packageLocation (cfe, allVersions) = do
+updatePackage (cfe, allVersions) = liftIO $ withSystemTempFile "sdist.tar.gz" $ \sdistFP sdistH -> do
     epi <- liftIO $ decodeFileEither fp
     case epi of
         Right pi
@@ -183,14 +176,22 @@ updatePackage set packageLocation (cfe, allVersions) = do
 
             let name'' = renderDistText name
                 version' = renderDistText version
-            liftIO $ download set [(name'', version')]
 
-            let tarball = packageLocation name'' version'
-            exists <- liftIO $ doesFileExist tarball
-            if exists
+            let url = concat
+                    [ "https://s3.amazonaws.com/hackage.fpcomplete.com/package/"
+                    , name''
+                    , "-"
+                    , version'
+                    , ".tar.gz"
+                    ]
+            req <- parseRequest url
+            res <- httpSink req $ \res -> sinkHandle sdistH >> return res
+            hClose sdistH
+
+            if getResponseStatus res == status200
                 then do
                     (desc, desct, cl, clt) <-
-                        sourceTarFile True tarball $$ CL.fold goEntry
+                        runResourceT $ sourceTarFile True sdistFP $$ CL.fold goEntry
                             (pack $ description pd, "haddock", "", "")
 
                     liftIO $ do
@@ -217,7 +218,7 @@ updatePackage set packageLocation (cfe, allVersions) = do
                             , piHomepage = pack $ homepage pd
                             , piLicenseName = pack $ renderDistText $ license pd
                             }
-                else liftIO $ putStrLn $ "Skipping: " ++ tarball
+                else liftIO $ putStrLn $ "Skipping: " ++ url
             return $ Just ()
   where
     name = cfeName cfe
