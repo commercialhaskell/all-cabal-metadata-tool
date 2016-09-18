@@ -5,7 +5,7 @@
 import qualified Codec.Archive.Tar                     as Tar
 import           Control.Exception                     (assert)
 import           Control.Exception.Enclosed            (tryAny)
-import           Control.Monad                         (when)
+import           Control.Monad                         (when, void)
 import           Control.Monad.IO.Class                (liftIO)
 import           Control.Monad.Trans.Resource          (MonadResource,
                                                         runResourceT, throwM)
@@ -64,7 +64,7 @@ import           Network.HTTP.Simple
 import           Prelude                               hiding (pi)
 import           Stackage.Metadata
 import           Stackage.PackageIndex.Conduit
-import           System.Directory                      (createDirectoryIfMissing, doesFileExist)
+import           System.Directory                      (createDirectoryIfMissing, doesFileExist, removeFile)
 import           System.FilePath                       (splitExtension,
                                                         takeDirectory,
                                                         takeFileName, (<.>),
@@ -191,6 +191,7 @@ updatePackage (cfe, allVersions) = liftIO $ withSystemTempFile "sdist.tar.gz" $ 
                         createDirectoryIfMissing True $ takeDirectory fp
                         let checkCond = getCheckCond gpd
                             getDeps' = getDeps checkCond
+                        void $ tryAny $ removeFile fp
                         encodeFile fp PackageInfo
                             { piLatest = version
                             , piHash = thehash
