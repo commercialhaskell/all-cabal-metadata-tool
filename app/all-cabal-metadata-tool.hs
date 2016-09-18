@@ -65,27 +65,21 @@ import           Prelude                               hiding (pi)
 import           Stackage.Metadata
 import           Stackage.PackageIndex.Conduit
 import           System.Directory                      (createDirectoryIfMissing, doesFileExist)
-import           System.Environment                    (getArgs)
 import           System.FilePath                       (splitExtension,
                                                         takeDirectory,
                                                         takeFileName, (<.>),
                                                         (</>))
 import System.IO (hClose)
 import System.IO.Temp
+import Data.Conduit.Zlib (ungzip)
 
 data Pair x y = Pair !x !y
 
 main :: IO ()
 main = withSystemTempFile "index.tar.gz" $ \indexFP indexH -> do
-    args <- getArgs
-    limitTo <-
-        case args of
-            [x] -> return $! read x
-            _ -> return 500
-
     preferredInfo <- loadPreferredInfo
 
-    httpSink "https://s3.amazonaws.com/hackage.fpcomplete.com/01-index.tar.gz" $ const $ sinkHandle indexH
+    httpSink "https://s3.amazonaws.com/hackage.fpcomplete.com/01-index.tar.gz" $ const $ ungzip =$ sinkHandle indexH
     hClose indexH
 
     newest <- runResourceT $ sourceAllCabalFiles (return indexFP)
@@ -115,7 +109,6 @@ main = withSystemTempFile "index.tar.gz" $ \indexFP indexH -> do
             CL.mapMaybeM updatePackage
             liftIO saveDeprecated
             )
-       =$ CL.isolate limitTo
        =$ CL.sinkNull
 
 saveDeprecated :: IO ()
