@@ -14,7 +14,7 @@ import           Data.Set                      (Set)
 import qualified Data.Set                      as Set
 import           Data.Text                     (Text)
 import           Data.Typeable                 (Typeable)
-import           Data.Version                  (Version)
+import           Distribution.Types.Version    (Version)
 import           Distribution.Package          (PackageName)
 import           Distribution.Version          (VersionRange)
 import           Prelude                       hiding (pi)

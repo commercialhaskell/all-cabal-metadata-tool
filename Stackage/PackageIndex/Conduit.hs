@@ -24,8 +24,7 @@ import           Data.Version                          (Version)
 import           Distribution.Compat.ReadP             (readP_to_S)
 import           Distribution.Package                  (PackageName)
 import           Distribution.PackageDescription       (GenericPackageDescription)
-import           Distribution.PackageDescription.Parse (ParseResult,
-                                                        parsePackageDescription)
+import           Distribution.PackageDescription.Parsec (ParseResult, parseGenericPackageDescription)
 import           Distribution.Text                     (disp, parse)
 import qualified Distribution.Text
 import           System.IO                             (IOMode (ReadMode),
@@ -71,7 +70,7 @@ sourceAllCabalFiles getIndexTar = do
                 , cfeVersion = version
                 , cfeRaw = lbs
                 , cfeEntry = e
-                , cfeParsed = parsePackageDescription $ TL.unpack $ dropBOM $ decodeUtf8With lenientDecode lbs
+                , cfeParsed = parseGenericPackageDescription $ L.toStrict lbs
                 }
             _ -> Nothing
 
@@ -82,9 +81,6 @@ sourceAllCabalFiles getIndexTar = do
         name <- parseDistText name'
         version <- parseDistText version'
         Just (name, version)
-
-    -- https://github.com/haskell/hackage-server/issues/351
-    dropBOM t = fromMaybe t $ TL.stripPrefix (TL.pack "\xFEFF") t
 
 parseDistText :: (Monad m, Distribution.Text.Text t) => String -> m t
 parseDistText s =

@@ -26,7 +26,7 @@ import           Data.Text                             (Text, pack, toLower,
 import           Data.Text.Encoding                    (decodeUtf8With)
 import qualified Data.Text.Encoding                    as TE
 import           Data.Text.Encoding.Error              (lenientDecode)
-import           Data.Version                          (Version (Version))
+import           Distribution.Types.Version            (Version, mkVersion)
 import           Data.Yaml                             (decodeEither',
                                                         decodeFileEither,
                                                         encodeFile)
@@ -47,7 +47,7 @@ import           Distribution.PackageDescription       (CondTree (..),
                                                         maintainer, package,
                                                         packageDescription,
                                                         synopsis)
-import           Distribution.PackageDescription.Parse (ParseResult (..))
+import           Distribution.PackageDescription.Parsec(ParseResult, runParseResult)
 import           Distribution.System                   (Arch (X86_64),
                                                         OS (Linux))
 import           Distribution.Version                  (VersionRange,
@@ -160,8 +160,8 @@ updatePackage (cfe, allVersions) = liftIO $ withSystemTempFile "sdist.tar.gz" $ 
                 ]
             gpd <-
                 case mgpd of
-                    ParseFailed pe -> error $ show (name, version, pe)
-                    ParseOk _ gpd -> return gpd
+                    Left pe -> error $ show (name, version, pe)
+                    Right gpd -> return gpd
 
             let pd = packageDescription gpd
             when (package pd /= PackageIdentifier name version) $
@@ -218,7 +218,7 @@ updatePackage (cfe, allVersions) = liftIO $ withSystemTempFile "sdist.tar.gz" $ 
     name = cfeName cfe
     version = cfeVersion cfe
     lbs = cfeRaw cfe
-    mgpd = cfeParsed cfe
+    (_warnings, mgpd) = runParseResult $ cfeParsed cfe
 
     fp = "packages" </> (unpack $ toLower $ pack $ take 2 $ name' ++ "XX") </> name' <.> "yaml"
     name' = renderDistText name
@@ -273,7 +273,7 @@ getCheckCond gpd =
     go (CAnd x y) = go x && go y
     go (COr x y) = go x || go y
 
-    ghcVersion = Version [7, 10, 1] [] -- arbitrary
+    ghcVersion = mkVersion [7, 10, 1] -- arbitrary
 
     flags =
         Map.fromList $ map toPair $ genPackageFlags gpd
